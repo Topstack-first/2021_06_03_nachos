@@ -27,9 +27,9 @@ public class UserKernel extends ThreadedKernel {
 
 		console = new SynchConsole(Machine.console());
 
-		freePhysicalPages = new LinkedList<>();
+		availablePhysPages = new LinkedList<>();
 
-		lockOfFreePhysPageList = new Lock();
+		availablePhysPageLocker = new Lock();
 
 		Machine.processor().setExceptionHandler(new Runnable() {
 			public void run() {
@@ -38,30 +38,30 @@ public class UserKernel extends ThreadedKernel {
 		});
 
 		// initialize free physical page list
-		initialFreePhysicalPageList();
+		initialFreePhysPageList();
 	}
 
-	private void initialFreePhysicalPageList() {
-		int numPhysPages = Machine.processor().getNumPhysPages();
-		for (int i = 0; i < numPhysPages; i++) {
-			freePhysicalPages.add(i);
+	private void initialFreePhysPageList() 
+	{
+		int physPageCount = Machine.processor().getNumPhysPages();
+		for (int i = 0; i < physPageCount; i++) 
+		{
+			availablePhysPages.add(i);
 		}
 	}
 
-	public static void increaseLiveProcess() {
-//		liveProcessMutex.P();
+	public static void increaseLiveProcess() 
+	{
 		boolean status = Machine.interrupt().disable();
 		liveProcessCount++;
 		Machine.interrupt().restore(status);
-//		liveProcessMutex.V();
 	}
 
-	public static void decreaseLiveProcess() {
-//		liveProcessMutex.P();
+	public static void decreaseLiveProcess() 
+	{
 		boolean status = Machine.interrupt().disable();
 		liveProcessCount--;
 		Machine.interrupt().restore(status);
-//		liveProcessMutex.V();
 	}
 
 	public static int getLiveProcessCount() {
@@ -72,19 +72,19 @@ public class UserKernel extends ThreadedKernel {
 	 * Test the console device.
 	 */
 	public void selfTest() {
-//		super.selfTest();
-//
-//		System.out.println("Testing the console device. Typed characters");
-//		System.out.println("will be echoed until q is typed.");
-//
-//		char c;
-//
-//		do {
-//			c = (char) console.readByte(true);
-//			console.writeByte(c);
-//		} while (c != 'q');
-//
-//		System.out.println("");
+		super.selfTest();
+
+		System.out.println("Testing the console device. Typed characters");
+		System.out.println("will be echoed until q is typed.");
+
+		char c;
+
+		do {
+			c = (char) console.readByte(true);
+			console.writeByte(c);
+		} while (c != 'q');
+
+		System.out.println("");
 	}
 
 	/**
@@ -141,7 +141,7 @@ public class UserKernel extends ThreadedKernel {
 			if (!process.execute(shellProgram, new String[] {})) {
 				System.out.println ("Also could not find '" +
 						shellProgram + "', aborting.");
-//				Lib.assertTrue(false);
+				Lib.assertTrue(false);
 			}
 
 		}
@@ -150,23 +150,24 @@ public class UserKernel extends ThreadedKernel {
 	}
 
 	public static int getAFreePhysicalPage() {
-		lockOfFreePhysPageList.acquire();
+		availablePhysPageLocker.acquire();
 
 		int result = -1;
-		if (freePhysicalPages.size() != 0) {
-			result = freePhysicalPages.remove(0);
+		if (availablePhysPages.size() == 0) 
+		{
+			availablePhysPageLocker.release();
 		}
-
-		lockOfFreePhysPageList.release();
+		result = availablePhysPages.remove(0);
+		
 		return result;
 	}
 
 	public static void releasePhysicalPage(int ppn) {
-		lockOfFreePhysPageList.acquire();
+		availablePhysPageLocker.acquire();
 
-		freePhysicalPages.add(ppn);
+		availablePhysPages.add(ppn);
 
-		lockOfFreePhysPageList.release();
+		availablePhysPageLocker.release();
 	}
 
 	/**
@@ -183,14 +184,9 @@ public class UserKernel extends ThreadedKernel {
 	private static Coff dummy1 = null;
 
 	// free physical pages
-	private static List<Integer> freePhysicalPages;
+	private static List<Integer> availablePhysPages;
 
-	private static Lock lockOfFreePhysPageList;
-
-//	private static Semaphore liveProcessMutex = new Semaphore(1);
-
-//	/**	The lock to deal with pid .*/
-//	public static Lock PIDLock = new Lock();
+	private static Lock availablePhysPageLocker;
 
 	/**	Use the counter to get a PID for process, which should equal to the number of process .*/
 	public static int processCounter = 0;

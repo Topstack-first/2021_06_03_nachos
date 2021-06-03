@@ -25,18 +25,14 @@ public class UserProcess {
 	 * Allocate a new process.
 	 */
 	public UserProcess() {
-//		int numPhysPages = Machine.processor().getNumPhysPages();
-//		pageTable = new TranslationEntry[numPhysPages];
-//		for (int i = 0; i < numPhysPages; i++)
-//			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
-		initialFDTable();
+		initialFileDescTable();
 
 		// critical section
-		PIDLock.acquire();
+		PIDLocker.acquire();
 
-		PID = UserKernel.processCounter++;
+		currentPID = UserKernel.processCounter++;
 
-		PIDLock.release();
+		PIDLocker.release();
 
 		UserKernel.increaseLiveProcess();
 	}
@@ -167,27 +163,27 @@ public class UserProcess {
 //		if (vaddr < 0 || vaddr >= memory.length || vaddr + length >= numPages * pageSize)
 //			return 0;
 
-		int currVaddr = vaddr;
-		int totalAmount = 0;
-		while (currVaddr < vaddr + length && currVaddr < numPages * pageSize) {
-			int vpn = Processor.pageFromAddress(currVaddr);
+		int curr_vaddr = vaddr;
+		int total_amount = 0;
+		while (curr_vaddr < vaddr + length && curr_vaddr < numPages * pageSize) {
+			int vpn = Processor.pageFromAddress(curr_vaddr);
 			int ppn = pageTable[vpn].ppn;
-			int addrOffset = Processor.offsetFromAddress(currVaddr);
-			int paddr = pageSize * ppn + addrOffset;
+			int addr_offset = Processor.offsetFromAddress(curr_vaddr);
+			int paddr = pageSize * ppn + addr_offset;
 
-			int nextPageVaddr = pageSize * (vpn + 1);
+			int next_page_vaddr = pageSize * (vpn + 1);
 			int amount;
-			if (nextPageVaddr < vaddr + length && nextPageVaddr < numPages * pageSize) {
-				amount = nextPageVaddr - currVaddr;
+			if (next_page_vaddr < vaddr + length && next_page_vaddr < numPages * pageSize) {
+				amount = next_page_vaddr - curr_vaddr;
 
 			} else {
-				amount = Math.min(vaddr + length, numPages * pageSize) - currVaddr;
+				amount = Math.min(vaddr + length, numPages * pageSize) - curr_vaddr;
 //				amount = vaddr + length - currVaddr;
 			}
 			System.arraycopy(memory, paddr, data, offset, amount);
-			currVaddr = nextPageVaddr;
+			curr_vaddr = next_page_vaddr;
 			offset += amount;
-			totalAmount += amount;
+			total_amount += amount;
 		}
 //		int vpn = Processor.pageFromAddress(vaddr);
 //		int addrOffset = Processor.offsetFromAddress(vaddr);
@@ -197,7 +193,7 @@ public class UserProcess {
 //		int amount = Math.min(length, memory.length - vaddr);
 //		System.arraycopy(memory, vaddr, data, offset, amount);
 
-		return totalAmount;
+		return total_amount;
 	}
 
 	/**
@@ -239,37 +235,37 @@ public class UserProcess {
 			return 0;
 		}
 
-		int currVaddr = vaddr;
-		int totalAmount = 0;
-		while (currVaddr < vaddr + length && currVaddr < numPages * pageSize) {
-			int vpn = Processor.pageFromAddress(currVaddr);
+		int curr_vaddr = vaddr;
+		int total_amount = 0;
+		while (curr_vaddr < vaddr + length && curr_vaddr < numPages * pageSize) {
+			int vpn = Processor.pageFromAddress(curr_vaddr);
 			int ppn = pageTable[vpn].ppn;
-			int addrOffset = Processor.offsetFromAddress(currVaddr);
-			int paddr = pageSize * ppn + addrOffset;
+			int addr_offset = Processor.offsetFromAddress(curr_vaddr);
+			int paddr = pageSize * ppn + addr_offset;
 
-			int nextPageVaddr = pageSize * (vpn + 1);
+			int next_page_vaddr = pageSize * (vpn + 1);
 			int amount;
-			if (nextPageVaddr < vaddr + length && nextPageVaddr < numPages * pageSize) {
-				amount = nextPageVaddr - currVaddr;
+			if (next_page_vaddr < vaddr + length && next_page_vaddr < numPages * pageSize) {
+				amount = next_page_vaddr - curr_vaddr;
 
 			} else {
-				amount = Math.min(vaddr + length, numPages * pageSize) - currVaddr;
+				amount = Math.min(vaddr + length, numPages * pageSize) - curr_vaddr;
 //				amount = vaddr + length - currVaddr;
 			}
 			System.arraycopy(data, offset, memory, paddr, amount);
-			currVaddr = nextPageVaddr;
+			curr_vaddr = next_page_vaddr;
 			offset += amount;
-			totalAmount += amount;
+			total_amount += amount;
 		}
 
 //		int amount = Math.min(length, memory.length - vaddr);
 //		System.arraycopy(data, offset, memory, vaddr, amount);
 
-		return totalAmount;
+		return total_amount;
 	}
 
-	private void initialFDTable() {
-		fileDescriptorTable = new OpenFile[maxFiles];
+	private void initialFileDescTable() {
+		fileDescriptorTable = new OpenFile[maxFileCount];
 		fileDescriptorTable[0] = UserKernel.console.openForReading(); // stdin
 		fileDescriptorTable[1] = UserKernel.console.openForWriting(); // stdout
 	}
@@ -458,16 +454,6 @@ public class UserProcess {
 
 	/**
 	 * Handle the exit() system call.
-	 * close all files in the file table
-	 * delete memory calling UnloadSections()
-	 * close coff by coff.close()
-	 * save status for parent
-	 * wake up parent
-	 * last process: kernel.kernel.terminate()
-	 * close KThread
-	 * handle abnormal exit
-	 * @param status
-	 * @return
 	 */
 	private int handleExit(int status) {
 		// Do not remove this call to the autoGrader...
@@ -476,63 +462,46 @@ public class UserProcess {
 		// can grade your implementation.
 
 		Lib.debug(dbgProcess, "UserProcess.handleExit (" + status + ")");
-		// close all files
-		for (int i = 2; i < fileDescriptorTable.length; ++i) {
-			if (fileDescriptorTable[i] != null) {
-				handleClose(i);
-			}
-		}
-
-		unloadSections();
-		coff.close();
-//		Any children of the process no longer have a parent process.
-//		 parent is shared, critical section
-		for (UserProcess child : childProcessLookUpMap.values()) {
-			child.parent = null;
-		}
-
-		this.exitStatus = status;
-
-		UserKernel.decreaseLiveProcess();
-
-		if (UserKernel.getLiveProcessCount() == 0) {
-			Kernel.kernel.terminate();
-		}
-		UThread.currentThread().finish();
-
-//		// TODO: handle abnormal exit
-//		if (status == Integer.MIN_VALUE) { return -1; }
+		// for now, unconditionally terminate with just one process
+		Kernel.kernel.terminate();
 
 		return 0;
 	}
 
 	private int handleCreate(int vaName) {
-		String name = readVirtualMemoryString(vaName, maxParameterLength);
-		if (name == null || name.length() > maxFileNameLength) { return -1; }
-		int fd = openHelper(name, true);
-		return fd;
+		String name = readVirtualMemoryString(vaName, maxParamLength);
+		if (name != null && name.length() <= maxFileNameLength) 
+		{
+			int fd = openFileD(name, true);
+			return fd;
+		}
+		return -1; 
 	}
 
 	private int handleOpen(int vaName) {
-		String name = readVirtualMemoryString(vaName, maxParameterLength);
-		if (name == null || name.length() > maxFileNameLength) { return -1; }
-		int fd = openHelper(name, false);
-		return fd;
+		String name = readVirtualMemoryString(vaName, maxParamLength);
+		if (name != null && name.length() <= maxFileNameLength) 
+		{
+			int fd = openFileD(name, true);
+			return fd;
+		}
+		return -1; 
 	}
 
-	private int openHelper(String filename, boolean create) {
+	private int openFileD(String filename, boolean create) 
+	{
 		OpenFile openFile = UserKernel.fileSystem.open(filename, create);
-		if (openFile != null) {
-			for (int fd = 2; fd < fileDescriptorTable.length; fd++) {
-				if (fileDescriptorTable[fd] == null) {
-					fileDescriptorTable[fd] = openFile;
-					return fd;
-				}
+		if (openFile == null) 
+			return -1;
+		for (int fd = 2; fd < fileDescriptorTable.length; fd++) 
+		{
+			if (fileDescriptorTable[fd] == null) 
+			{
+				fileDescriptorTable[fd] = openFile;
+				return fd;
 			}
-			return -1;  // FDT full
-		} else {
-			return -1; // file doesn't exist
 		}
+		return -1;  // FDT full
 	}
 
 	private int handleRead(int fd, int bufferPointer, int count) { // TODO: How to check bufferPointer
@@ -540,14 +509,17 @@ public class UserProcess {
 
 		byte[] localBuffer = new byte[count];
 		int recv = fileDescriptorTable[fd].read(localBuffer, 0, count);
-		if (recv == -1) { return -1; }
+		if (recv == -1) { 
+			return -1; 
+		}
 
 		int transfered = writeVirtualMemory(bufferPointer, localBuffer, 0, recv);
-		if (transfered < recv) {
-			return -1;
-		} else {
+		if (transfered >= recv) 
+		{
 			return recv;
 		}
+
+		return -1;
 	}
 
 	private int handleWrite(int fd, int bufferPointer, int count) {
@@ -557,66 +529,70 @@ public class UserProcess {
 		int transfered = readVirtualMemory(bufferPointer, localBuffer, 0, count);
 		if (transfered < count) { return -1; }
 		int send =  fileDescriptorTable[fd].write(localBuffer, 0, count);
-		if (send < count) {
-			return -1;
-		} else {
+		if (send >= count)
+		{
 			return send;
 		}
+
+		return -1;
 	}
 
-	private int handleClose(int fd) {
-		if (!(fd >=0 && fd < fileDescriptorTable.length) || fileDescriptorTable[fd] == null) { return -1; }
+	private int handleClose(int fd) 
+	{
+		if (!(fd >=0 && fd < fileDescriptorTable.length) || fileDescriptorTable[fd] == null) 
+		{ 
+			return -1; 
+		}
 		fileDescriptorTable[fd].close();
 		fileDescriptorTable[fd] = null;
 		return 0;
 	}
 
 	private int handleUnlink(int vaName) {
-		String name = readVirtualMemoryString(vaName, maxParameterLength);
-		if (name == null || name.length() > maxFileNameLength) { return -1; }
-		boolean result = UserKernel.fileSystem.remove(name);
-		return result ? 0:-1;
+		String name = readVirtualMemoryString(vaName, maxParamLength);
+		if (name != null && name.length() <= maxFileNameLength) 
+		{  
+			boolean res = UserKernel.fileSystem.remove(name);
+			return res ? 0:-1;
+		}
+		return -1;
 	}
 
-	/**
-	 * read coffName from virtual address
-	 * read argvs from virtual address
-	 * @param vaCoff
-	 * @param argc
-	 * @param argv
-	 * @return the child process's process ID or -1
-	 */
-	private int handleExec(int vaCoff, int argc, int argv) {
-		if (argc < 0) {
+	private int handleExec(int vaCoff, int argc, int argv) 
+	{
+		if (argc < 0) 
+		{
 			Lib.debug(dbgProcess, "handleExec: argc = " + argc);
 			Lib.debug(dbgProcess, "handleExec: argv = " + argv);
 			return -1;
 		}
-		String coffName = readVirtualMemoryString(vaCoff, maxParameterLength);
+		String coffName = readVirtualMemoryString(vaCoff, maxParamLength);
 		// this string must include the ".coff" extension
-		if (coffName == null || coffName.length() == 0 || !coffName.endsWith(".coff")) {
+		if (coffName == null || coffName.length() == 0 || !coffName.endsWith(".coff")) 
+		{
 			Lib.debug(dbgProcess, "handleExec: coffName wrong, coffName = " + coffName);
 			return -1;
 		}
 
 		// get the arguments address
 		// each pointer has 4 type, use readvirtualmemory() and track the current vaddr
-		String[] argStrs = new String[argc];
-		byte[] buffer = new byte[4];
-		for (int i = 0; i < argc; ++i) {
-			int readCount = readVirtualMemory(argv + i * 4, buffer);
+		String[] argArray = new String[argc];
+		byte[] buffer4Int = new byte[4];
+		for (int i = 0; i < argc; ++i) 
+		{
+			int readCount = readVirtualMemory(argv + i * 4, buffer4Int);
 			if (readCount < 4) return -1;
 
-			int vaddr = Lib.bytesToInt(buffer, 0);
-			argStrs[i] = readVirtualMemoryString(vaddr,maxParameterLength);
+			int vaddr = Lib.bytesToInt(buffer4Int, 0);
+			argArray[i] = readVirtualMemoryString(vaddr,maxParamLength);
 		}
 
 		// create child process
-		UserProcess childProcess = new UserProcess();
-		childProcess.parent = this;
-		childProcessLookUpMap.put(childProcess.PID, childProcess);
-		if (childProcess.execute(coffName, argStrs)) {
-			return childProcess.PID;
+		UserProcess subProcess = new UserProcess();
+		subProcess.parentProcess = this;
+		childProcessMapper.put(subProcess.currentPID, subProcess);
+		if (subProcess.execute(coffName, argArray)) {
+			return subProcess.currentPID;
 		}
 
 		Lib.debug(dbgProcess, "handleExec: cannot execute child process.");
@@ -624,30 +600,23 @@ public class UserProcess {
 		return -1;
 	}
 
-	/**
-	 * use the Kthread.join
-	 * get child status and write to *status
-	 * @param pid childPID, only a process's parent can join to it.
-	 * @param vaStatus
-	 * @return the status of join()
-	 */
 	public int handleJoin(int pid, int vaStatus) {
-		if (!childProcessLookUpMap.containsKey(pid)) {
-			Lib.debug(dbgProcess, "Doesn't have the child PId with PID = " + pid);
+		if (!childProcessMapper.containsKey(pid)) {
+			Lib.debug(dbgProcess, "Cannot find the child process with PID = " + pid);
 			return -1;
 		}
 
-		UserProcess child = childProcessLookUpMap.get(pid);
-		child.thread.join();
-		childProcessLookUpMap.remove(pid);
+		UserProcess subProcess = childProcessMapper.get(pid);
+		subProcess.thread.join();
+		childProcessMapper.remove(pid);
 
 		// store the status to the *status
 		byte[] buffer = new byte[4];
 		// TODO: check exit status
-		buffer = Lib.bytesFromInt(child.exitStatus);
+		buffer = Lib.bytesFromInt(subProcess.exitStatus);
 		int writeCount = writeVirtualMemory(vaStatus, buffer);
 //		return writeCount == 4 ? 1 : 0;
-		return (child.exitStatus != Integer.MIN_VALUE && writeCount == 4) ? 1:0;
+		return (subProcess.exitStatus != Integer.MIN_VALUE && writeCount == 4) ? 1:0;
 	}
 
 	private static final int syscallHalt = 0, syscallExit = 1, syscallExec = 2,
@@ -792,34 +761,34 @@ public class UserProcess {
 	/** The thread that executes the user-level program. */
 	protected UThread thread;
 
-	/** Parent process of child process .*/
-	protected UserProcess parent = null;
+	private int initialPC, initialSP;
+
+	private int argc, argv;
+
+	private static final int maxFileCount = 16;
+
+	private static final int maxParamLength = 256;
+
+	private static final int maxFileNameLength = 255;
+
+	/** Parent process of the child process .*/
+	protected UserProcess parentProcess = null;
 
 	/** Current Process's PID .*/
-	protected int PID;
+	protected int currentPID;
 
 	protected OpenFile[] fileDescriptorTable;
 
 	/** The relationship between PID and process .*/
-	private static Map<Integer, UserProcess> childProcessLookUpMap = new HashMap<>();
+	private static Map<Integer, UserProcess> childProcessMapper = new HashMap<>();
 
 	/**	The lock to deal with pid .*/
-	public static Lock PIDLock = new Lock();
-
-	private int initialPC, initialSP;
-
-	private int argc, argv;
+	public static Lock PIDLocker = new Lock();
 
 	/** status of the process exited or not. */
 	private int exitStatus;
 
 	private static final int pageSize = Processor.pageSize;
-
-	private static final int maxFiles = 16;
-
-	private static final int maxParameterLength = 256;
-
-	private static final int maxFileNameLength = 255;
 
 	private static final char dbgProcess = 'a';
 }
